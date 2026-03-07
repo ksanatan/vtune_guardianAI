@@ -1,0 +1,31 @@
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# Environment files
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Reports
+reports/
+*.html
+!guardian/reporters/html_report.py
+
+# OS
+.DS_Store
+Thumbs.db

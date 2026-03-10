@@ -134,6 +134,10 @@ def get_llm(config: GuardianConfig) -> BaseChatModel:
             "Install with: pip install langchain-openai"
         )
 
+    def _is_reasoning_model(model_name: str) -> bool:
+        """Reasoning models (o1, o3, o4 series) only support temperature=1."""
+        return any(model_name.startswith(prefix) for prefix in ("o1", "o3", "o4"))
+
     primary = ChatOpenAI(
         model=config.github_model,
         base_url=config.github_base_url,
@@ -143,11 +147,12 @@ def get_llm(config: GuardianConfig) -> BaseChatModel:
 
     # If a fallback model is configured, wrap with FallbackChatModel
     if config.github_fallback_model and config.github_fallback_model != config.github_model:
+        fallback_temp = 1 if _is_reasoning_model(config.github_fallback_model) else 0.1
         fallback = ChatOpenAI(
             model=config.github_fallback_model,
             base_url=config.github_base_url,
             api_key=config.github_token,
-            temperature=0.1,  # Standard models support low temperature
+            temperature=fallback_temp,
         )
         console.print(
             f"  [dim]🔄 Fallback enabled: {config.github_model} → {config.github_fallback_model}[/dim]"

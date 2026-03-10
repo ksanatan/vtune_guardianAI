@@ -80,7 +80,7 @@ def combined_analysis_node(
         if fc.change_type == "deleted" or not fc.diff_content:
             continue
 
-        diff_content = fc.diff_content[:10000]
+        diff_content = fc.diff_content[:20000]
 
         try:
             messages = [

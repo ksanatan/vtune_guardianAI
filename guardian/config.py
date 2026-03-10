@@ -36,8 +36,8 @@ class GuardianConfig:
 
     # GitHub Copilot (GitHub Models) — sole LLM provider
     github_token: str = ""
-    github_model: str = "o4-mini"
-    github_fallback_model: str = "gpt-4o"
+    github_model: str = "o3"
+    github_fallback_model: str = "o3-mini"
     github_base_url: str = "https://models.inference.ai.azure.com"
 
     # Static analysis tool paths
@@ -69,8 +69,8 @@ class GuardianConfig:
 
         return cls(
             github_token=os.getenv("GITHUB_TOKEN", ""),
-            github_model=os.getenv("GITHUB_MODEL", "o4-mini"),
-            github_fallback_model=os.getenv("GITHUB_FALLBACK_MODEL", "gpt-4o"),
+            github_model=os.getenv("GITHUB_MODEL", "o3"),
+            github_fallback_model=os.getenv("GITHUB_FALLBACK_MODEL", "o3-mini"),
             github_base_url=os.getenv("GITHUB_BASE_URL", "https://models.inference.ai.azure.com"),
             cppcheck_path=os.getenv("CPPCHECK_PATH", "cppcheck"),
             clang_tidy_path=os.getenv("CLANG_TIDY_PATH", "clang-tidy"),

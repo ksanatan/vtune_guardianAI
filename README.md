@@ -169,11 +169,11 @@ git push
 Edit `.env` to switch models:
 
 ```bash
-GITHUB_MODEL=o4-mini           # Default (best for code analysis)
-GITHUB_FALLBACK_MODEL=gpt-4o   # Auto-fallback if rate limited
+GITHUB_MODEL=o3                # Default (best reasoning model for code analysis)
+GITHUB_FALLBACK_MODEL=o3-mini  # Auto-fallback if rate limited (reasoning model)
 ```
 
-Other available models: `gpt-4o`, `gpt-4o-mini`, `o3-mini`, `gpt-4.1`
+Other available models: `o4-mini`, `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`
 
 ---
 
@@ -184,7 +184,8 @@ Other available models: `gpt-4o`, `gpt-4o-mini`, `o3-mini`, `gpt-4.1`
 | "Not a git repository" | Use `--repo /path/to/repo` pointing to a directory with `.git` |
 | "GITHUB_TOKEN is required" | Set your token in `.env`: `GITHUB_TOKEN=ghp_...` |
 | Rate limit errors | Automatic — falls back to backup model seamlessly |
-| "cppcheck not available" | Optional. Install: `sudo apt install cppcheck clang-tidy` |
+| "cppcheck not available" | Install: `sudo apt install cppcheck` |
+| "clang-tidy not available" | Install: `sudo apt install clang-tidy` |
 | Proxy issues | `export https_proxy=http://proxy-dmz.intel.com:912` |
 
 ---

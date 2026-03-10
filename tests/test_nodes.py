@@ -19,8 +19,8 @@ class TestGuardianConfig:
     def test_default_config(self):
         """Default config should have sensible defaults."""
         config = GuardianConfig()
-        assert config.github_model == "o4-mini"
-        assert config.github_fallback_model == "gpt-4o"
+        assert config.github_model == "o3"
+        assert config.github_fallback_model == "o3-mini"
         assert config.severity_threshold == "warning"
         assert config.max_files == 50
         assert config.report_format == "terminal"
@@ -28,17 +28,17 @@ class TestGuardianConfig:
         assert config.enable_ai_review is True
 
     def test_active_llm_info(self):
-        config = GuardianConfig(github_model="o4-mini", github_fallback_model="gpt-4o")
+        config = GuardianConfig(github_model="o3", github_fallback_model="o3-mini")
         info = config.get_active_llm_info()
         assert "GitHub Models" in info
-        assert "o4-mini" in info
-        assert "gpt-4o" in info
+        assert "o3" in info
+        assert "o3-mini" in info
 
     def test_active_llm_info_no_fallback(self):
-        config = GuardianConfig(github_model="gpt-4o", github_fallback_model="")
+        config = GuardianConfig(github_model="o3", github_fallback_model="")
         info = config.get_active_llm_info()
         assert "GitHub Models" in info
-        assert "gpt-4o" in info
+        assert "o3" in info
         assert "fallback" not in info
 
 

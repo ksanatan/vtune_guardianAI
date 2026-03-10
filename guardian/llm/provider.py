@@ -4,9 +4,9 @@ VTune GuardianAI - LLM Provider (GitHub Models)
 Creates the LLM instance backed by GitHub Copilot / GitHub Models.
 Uses the OpenAI-compatible endpoint at models.inference.ai.azure.com.
 
-Includes automatic fallback: if the primary model (e.g. o4-mini) hits
+Includes automatic fallback: if the primary model (e.g. o3) hits
 rate limits or parameter errors, it auto-switches to the fallback model
-(e.g. gpt-4o) for that call and continues seamlessly.
+(e.g. o3-mini) for that call and continues seamlessly.
 """
 
 from __future__ import annotations
@@ -77,7 +77,7 @@ def _is_rate_limit_error(exc: Exception) -> bool:
 
     Catches:
     - HTTP 429 rate limit / quota errors
-    - HTTP 400 unsupported parameter errors (e.g. o4-mini doesn't support temperature)
+    - HTTP 400 unsupported parameter errors (e.g. reasoning models require temperature=1)
     - Model-specific incompatibility errors
     """
     error_str = str(exc).lower()
@@ -104,9 +104,9 @@ def get_llm(config: GuardianConfig) -> BaseChatModel:
     """
     Create a GitHub Models LLM instance with automatic fallback.
 
-    Primary model (e.g. o4-mini) is tried first.  If it hits rate limits
+    Primary model (e.g. o3) is tried first.  If it hits rate limits
     or unsupported-parameter errors, automatically falls back to the
-    fallback model (e.g. gpt-4o).
+    fallback model (e.g. o3-mini).
 
     Uses the OpenAI-compatible endpoint authenticated with a GitHub PAT.
 

@@ -38,6 +38,7 @@ class GuardianConfig:
     github_token: str = ""
     github_model: str = "o3"
     github_fallback_model: str = "o3-mini"
+    github_model_chain: str = ""  # Comma-separated: "o3,o3-mini,o4-mini,gpt-4.1-mini"
     github_base_url: str = "https://models.inference.ai.azure.com"
 
     # Static analysis tool paths
@@ -71,6 +72,7 @@ class GuardianConfig:
             github_token=os.getenv("GITHUB_TOKEN", ""),
             github_model=os.getenv("GITHUB_MODEL", "o3"),
             github_fallback_model=os.getenv("GITHUB_FALLBACK_MODEL", "o3-mini"),
+            github_model_chain=os.getenv("GITHUB_MODEL_CHAIN", ""),
             github_base_url=os.getenv("GITHUB_BASE_URL", "https://models.inference.ai.azure.com"),
             cppcheck_path=os.getenv("CPPCHECK_PATH", "cppcheck"),
             clang_tidy_path=os.getenv("CLANG_TIDY_PATH", "clang-tidy"),
@@ -82,5 +84,9 @@ class GuardianConfig:
 
     def get_active_llm_info(self) -> str:
         """Return a human-readable string of the active LLM configuration."""
+        if self.github_model_chain:
+            models = [m.strip() for m in self.github_model_chain.split(",") if m.strip()]
+            chain_str = " → ".join(models)
+            return f"GitHub Models (chain: {chain_str}) @ {self.github_base_url}"
         fallback_info = f" → fallback: {self.github_fallback_model}" if self.github_fallback_model else ""
         return f"GitHub Models ({self.github_model}{fallback_info}) @ {self.github_base_url}"

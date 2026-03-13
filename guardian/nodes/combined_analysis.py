@@ -6,6 +6,10 @@ into ONE single LLM call for maximum speed on CPU-only machines.
 
 Instead of 4 separate LLM invocations (~30 min on CPU), this does
 everything in 1 call (~5-7 min on CPU).
+
+Supports multi-model chain: when a model is rate-limited mid-run,
+keeps results from files already analyzed and retries only the
+remaining files with the next model in the chain.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from rich.console import Console
 
 from guardian.agents.state import GuardianState, Issue
 from guardian.config import GuardianConfig
+from guardian.llm.provider import ModelChainChatModel, _is_rate_limit_error
 
 console = Console()
 
@@ -58,6 +63,11 @@ def combined_analysis_node(
 ) -> dict:
     """
     Run ALL LLM-based analysis in a single combined prompt.
+
+    With ModelChainChatModel: when a model is rate-limited, keeps
+    results already obtained and retries only the failed + remaining
+    files using the next model in the chain.
+
     Returns issues split into the correct category buckets.
     """
     console.print("  🧠 [bold cyan]Node 3: Combined AI Analysis[/bold cyan] (memory + review + security + best practices)...")
@@ -76,34 +86,64 @@ def combined_analysis_node(
     security_issues = []
     best_practice_issues = []
 
-    for fc in all_files:
-        if fc.change_type == "deleted" or not fc.diff_content:
-            continue
+    # Track which files still need analysis
+    pending_files = [fc for fc in all_files if fc.change_type != "deleted" and fc.diff_content]
+    analyzed_files = set()  # file_paths that have been successfully analyzed
 
-        diff_content = fc.diff_content[:20000]
+    is_chain = isinstance(llm, ModelChainChatModel)
 
-        try:
-            messages = [
-                SystemMessage(content=COMBINED_SYSTEM_PROMPT),
-                HumanMessage(content=f"File: {fc.file_path} (Language: {fc.language})\n\nDiff:\n```\n{diff_content}\n```"),
-            ]
+    while pending_files:
+        current_model = llm.current_model_name if is_chain else "LLM"
+        failed_files = []
 
-            response = llm.invoke(messages)
-            file_issues = _parse_combined_response(response.content, fc.file_path)
+        for fc in pending_files:
+            diff_content = fc.diff_content[:25000]
 
-            # Sort into category buckets
-            for issue in file_issues:
-                if issue.category == "memory_leak":
-                    memory_issues.append(issue)
-                elif issue.category == "security":
-                    security_issues.append(issue)
-                elif issue.category == "best_practice":
-                    best_practice_issues.append(issue)
+            try:
+                messages = [
+                    SystemMessage(content=COMBINED_SYSTEM_PROMPT),
+                    HumanMessage(content=f"File: {fc.file_path} (Language: {fc.language})\n\nDiff:\n```\n{diff_content}\n```"),
+                ]
+
+                response = llm.invoke(messages)
+                file_issues = _parse_combined_response(response.content, fc.file_path)
+
+                # Sort into category buckets
+                for issue in file_issues:
+                    if issue.category == "memory_leak":
+                        memory_issues.append(issue)
+                    elif issue.category == "security":
+                        security_issues.append(issue)
+                    elif issue.category == "best_practice":
+                        best_practice_issues.append(issue)
+                    else:
+                        ai_review_issues.append(issue)
+
+                analyzed_files.add(fc.file_path)
+
+            except Exception as e:
+                if _is_rate_limit_error(e) and is_chain and llm.has_next_model:
+                    # Model exhausted — collect this file + remaining for retry
+                    failed_files.append(fc)
+                    # Add all remaining files that haven't been tried yet
+                    remaining_idx = pending_files.index(fc) + 1
+                    failed_files.extend(pending_files[remaining_idx:])
+                    console.print(
+                        f"    [yellow]📋 Keeping {len(analyzed_files)} file(s) from {current_model}, "
+                        f"retrying {len(failed_files)} file(s) with next model...[/yellow]"
+                    )
+                    break  # Exit inner loop, retry with next model
                 else:
-                    ai_review_issues.append(issue)
+                    console.print(f"    [yellow]⚠ Analysis error for {fc.file_path}: {e}[/yellow]")
 
-        except Exception as e:
-            console.print(f"    [yellow]⚠ Analysis error for {fc.file_path}: {e}[/yellow]")
+        if failed_files and is_chain and llm.has_next_model:
+            # Advance was already done by ModelChainChatModel._generate,
+            # but if the exception was caught here, we advance manually
+            if not hasattr(llm, '_last_advanced') or not llm._last_advanced:
+                llm.advance_to_next_model()
+            pending_files = failed_files
+        else:
+            break  # All files processed or no more models
 
     total = len(memory_issues) + len(ai_review_issues) + len(security_issues) + len(best_practice_issues)
     console.print(f"    Found [bold]{total}[/bold] issue(s): "

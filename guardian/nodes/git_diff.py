@@ -57,12 +57,12 @@ def git_diff_node(state: GuardianState, config: GuardianConfig) -> dict:
             change_type = _get_change_type(diff)
             file_path = diff.b_path if diff.b_path else diff.a_path
 
-            # Get the actual diff content (use -U25 for extra context around changes)
+            # Get the actual diff content (use -U30 for extra context around changes)
             try:
                 if state.scan_all:
-                    diff_content = repo.git.diff("HEAD", "-U25", "--", file_path)
+                    diff_content = repo.git.diff("HEAD", "-U30", "--", file_path)
                 else:
-                    diff_content = repo.git.diff("--cached", "-U25", "--", file_path)
+                    diff_content = repo.git.diff("--cached", "-U30", "--", file_path)
             except Exception:
                 diff_content = ""
 

@@ -19,12 +19,45 @@ For every issue found, it shows you the **problematic code** and a **suggested f
 
 ---
 
+## Architecture
+
+```
+vtune-guardian check --repo /path/to/repo --all
+        │
+        ▼
+    git_diff (-U30 context) → file_classifier
+        │
+    ┌───┼───────┬──────────────┐
+    ▼   ▼       ▼              ▼
+ static combined  security   build
+ analysis  AI     patterns   compat
+ (cppcheck (LLM)  (regex)    (LLM)
+  clang-   │
+  tidy)    │
+    └───┬──┴───────┬──────────┘
+        ▼          ▼
+     aggregator → decision → report
+                  (block/warn/pass)
+```
+
+**Model Chain**: When a model is rate-limited, GuardianAI automatically advances
+to the next model in the chain and retries. Results from previous models are kept.
+
+```
+o3 (best) → o4-mini → o3-mini → gpt-4.1-mini
+ ~15 calls    ~15       ~15        ~15  = ~60 calls/day
+```
+
+---
+
 ## Prerequisites
 
 - **Linux** (tested on Ubuntu 22.04)
 - **Python 3.10+**
 - **Git**
 - **GitHub Copilot subscription** (for the AI analysis — free tier works)
+- **cppcheck** (optional): `sudo apt install cppcheck`
+- **clang-tidy** (optional): `sudo apt install clang-tidy`
 
 ---
 
@@ -166,14 +199,25 @@ git push
 
 ## Changing the AI Model
 
-Edit `.env` to switch models:
+Edit `.env` to configure the model chain (recommended) or simple fallback:
 
 ```bash
-GITHUB_MODEL=o3                # Default (best reasoning model for code analysis)
-GITHUB_FALLBACK_MODEL=o3-mini  # Auto-fallback if rate limited (reasoning model)
+# Model Chain (recommended) — cycles through models on rate limit
+# Ordered by quality: best first, cheapest last
+GITHUB_MODEL_CHAIN=o3,o4-mini,o3-mini,gpt-4.1-mini
+
+# Simple fallback (legacy) — used if MODEL_CHAIN is empty
+GITHUB_MODEL=o3
+GITHUB_FALLBACK_MODEL=o4-mini
 ```
 
-Other available models: `o4-mini`, `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`
+**Quality ranking** (tested against 23 Coverity SDL issues):
+| Model | Coverity Match |
+|-------|---------------|
+| o3 | 73.9% |
+| o4-mini | 56.5% |
+| o3-mini | 47.8% |
+| gpt-4.1-mini | untested |
 
 ---
 
@@ -183,7 +227,7 @@ Other available models: `o4-mini`, `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`
 |---------|-----|
 | "Not a git repository" | Use `--repo /path/to/repo` pointing to a directory with `.git` |
 | "GITHUB_TOKEN is required" | Set your token in `.env`: `GITHUB_TOKEN=ghp_...` |
-| Rate limit errors | Automatic — falls back to backup model seamlessly |
+| Rate limit errors | Automatic — model chain cycles through o3 → o4-mini → o3-mini → gpt-4.1-mini |
 | "cppcheck not available" | Install: `sudo apt install cppcheck` |
 | "clang-tidy not available" | Install: `sudo apt install clang-tidy` |
 | Proxy issues | `export https_proxy=http://proxy-dmz.intel.com:912` |
@@ -193,6 +237,16 @@ Other available models: `o4-mini`, `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`
 ## 📄 License
 
 Intel Proprietary — Internal Use Only
+
+---
+
+## Tuning Parameters
+
+| Parameter | Value | Location | Notes |
+|-----------|-------|----------|-------|
+| `-U30` | 30 lines of diff context | `guardian/nodes/git_diff.py` | Sweet spot for function-level analysis |
+| `25000` | Max chars per file to LLM | `guardian/nodes/combined_analysis.py` | Prevents context overflow |
+| `max_files=50` | Max files per run | `.env` / config | Safety limit |
 
 ---
 

@@ -197,30 +197,6 @@ git push
 
 ---
 
-## Changing the AI Model
-
-Edit `.env` to configure the model chain (recommended) or simple fallback:
-
-```bash
-# Model Chain (recommended) — cycles through models on rate limit
-# Ordered by quality: best first, cheapest last
-GITHUB_MODEL_CHAIN=o3,o4-mini,o3-mini,gpt-4.1-mini
-
-# Simple fallback (legacy) — used if MODEL_CHAIN is empty
-GITHUB_MODEL=o3
-GITHUB_FALLBACK_MODEL=o4-mini
-```
-
-**Quality ranking** (tested against 23 Coverity SDL issues):
-| Model | Coverity Match |
-|-------|---------------|
-| o3 | 73.9% |
-| o4-mini | 56.5% |
-| o3-mini | 47.8% |
-| gpt-4.1-mini | untested |
-
----
-
 ## Troubleshooting
 
 | Problem | Fix |
@@ -237,17 +213,5 @@ GITHUB_FALLBACK_MODEL=o4-mini
 ## 📄 License
 
 Intel Proprietary — Internal Use Only
-
----
-
-## Tuning Parameters
-
-| Parameter | Value | Location | Notes |
-|-----------|-------|----------|-------|
-| `-U30` | 30 lines of diff context | `guardian/nodes/git_diff.py` | Sweet spot for function-level analysis |
-| `25000` | Max chars per file to LLM | `guardian/nodes/combined_analysis.py` | Prevents context overflow |
-| `max_files=50` | Max files per run | `.env` / config | Safety limit |
-
----
 
 *VTune GuardianAI v0.1.0 — Intel Performance Analysis Tools*

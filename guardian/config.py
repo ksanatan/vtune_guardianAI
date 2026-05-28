@@ -36,6 +36,8 @@ class GuardianConfig:
 
     # LLM Provider selection: "github" or "bedrock"
     llm_provider: str = "bedrock"
+    # Cross-provider fallback: if primary provider fails, fall back to this one
+    fallback_provider: str = "github"  # "github", "bedrock", or "" (disabled)
 
     # GitHub Copilot (GitHub Models)
     github_token: str = ""
@@ -79,6 +81,7 @@ class GuardianConfig:
 
         return cls(
             llm_provider=os.getenv("LLM_PROVIDER", "bedrock"),
+            fallback_provider=os.getenv("FALLBACK_PROVIDER", "github"),
             github_token=os.getenv("GITHUB_TOKEN", ""),
             github_model=os.getenv("GITHUB_MODEL", "o3"),
             github_fallback_model=os.getenv("GITHUB_FALLBACK_MODEL", "o3-mini"),
@@ -98,17 +101,26 @@ class GuardianConfig:
 
     def get_active_llm_info(self) -> str:
         """Return a human-readable string of the active LLM configuration."""
+        # Cross-provider fallback suffix
+        cross_fallback = ""
+        if self.fallback_provider and self.fallback_provider != self.llm_provider:
+            if self.fallback_provider == "github":
+                fb_label = f"GitHub Models ({self.github_model_chain or self.github_model})"
+            else:
+                fb_label = f"Bedrock ({self.bedrock_model.split('.')[-1].split('-v')[0]})"
+            cross_fallback = f" ⟶ cross-provider fallback: {fb_label}"
+
         if self.llm_provider == "bedrock":
             short_model = self.bedrock_model.split(".")[-1].split("-v")[0] if "." in self.bedrock_model else self.bedrock_model
             fallback_info = ""
             if self.bedrock_fallback_model and self.bedrock_fallback_model != self.bedrock_model:
                 short_fb = self.bedrock_fallback_model.split(".")[-1].split("-v")[0] if "." in self.bedrock_fallback_model else self.bedrock_fallback_model
-                fallback_info = f" → fallback: {short_fb}"
-            return f"AWS Bedrock ({short_model}{fallback_info}) @ {self.bedrock_region}"
+                fallback_info = f" → {short_fb}"
+            return f"AWS Bedrock ({short_model}{fallback_info}) @ {self.bedrock_region}{cross_fallback}"
         else:
             if self.github_model_chain:
                 models = [m.strip() for m in self.github_model_chain.split(",") if m.strip()]
                 chain_str = " → ".join(models)
-                return f"GitHub Models (chain: {chain_str}) @ {self.github_base_url}"
+                return f"GitHub Models (chain: {chain_str}) @ {self.github_base_url}{cross_fallback}"
             fallback_info = f" → fallback: {self.github_fallback_model}" if self.github_fallback_model else ""
-            return f"GitHub Models ({self.github_model}{fallback_info}) @ {self.github_base_url}"
+            return f"GitHub Models ({self.github_model}{fallback_info}) @ {self.github_base_url}{cross_fallback}"

@@ -212,6 +212,10 @@ def get_llm(config: GuardianConfig) -> BaseChatModel:
       - AWS Bedrock (Claude) if LLM_PROVIDER=bedrock
       - GitHub Models if LLM_PROVIDER=github
 
+    If FALLBACK_PROVIDER is set to a different provider, wraps the primary
+    LLM in a cross-provider fallback: if the primary provider fails entirely
+    (all its models exhausted), it falls back to the other provider.
+
     Returns:
         A LangChain-compatible ChatModel instance.
 
@@ -219,8 +223,39 @@ def get_llm(config: GuardianConfig) -> BaseChatModel:
         ValueError: If required credentials are not set.
     """
     if config.llm_provider == "bedrock":
-        return _get_bedrock_llm(config)
-    return _get_github_llm(config)
+        primary = _get_bedrock_llm(config)
+    else:
+        primary = _get_github_llm(config)
+
+    # Cross-provider fallback
+    if config.fallback_provider and config.fallback_provider != config.llm_provider:
+        try:
+            if config.fallback_provider == "github":
+                fallback = _get_github_llm(config)
+                fallback_name = f"GitHub Models ({config.github_model_chain or config.github_model})"
+            else:
+                fallback = _get_bedrock_llm(config)
+                fallback_name = f"Bedrock ({config.bedrock_model})"
+
+            primary_name = (
+                f"Bedrock ({config.bedrock_model})"
+                if config.llm_provider == "bedrock"
+                else f"GitHub ({config.github_model})"
+            )
+            console.print(
+                f"  [dim]🔀 Cross-provider fallback: {config.llm_provider} → {config.fallback_provider}[/dim]"
+            )
+            return FallbackChatModel(
+                primary=primary,
+                fallback=fallback,
+                primary_name=primary_name,
+                fallback_name=fallback_name,
+            )
+        except (ValueError, ImportError):
+            # If fallback provider can't be initialized (missing creds), continue without it
+            pass
+
+    return primary
 
 
 def _get_bedrock_llm(config: GuardianConfig) -> BaseChatModel:

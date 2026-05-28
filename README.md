@@ -74,11 +74,11 @@ VTune GuardianAI automatically analyzes your code changes for **bugs, memory lea
 ┌───────────────────────────▼─────────────────────────────┐
 │               LLM Provider (Automatic Fallback)          │
 │                                                          │
-│  Option A: AWS Bedrock                                   │
-│    Primary: Claude Sonnet 4 → Fallback: Claude 3.5 Haiku │
+│  Primary: AWS Bedrock (Claude Sonnet 4)                  │
+│    In-provider fallback: Claude 3.5 Haiku                │
 │                                                          │
-│  Option B: GitHub Models                                 │
-│    Chain: o3 → o3-mini → o4-mini → gpt-4.1-mini         │
+│  Cross-Provider Fallback: GitHub Models                  │
+│    Chain: o3 → o4-mini → o3-mini → gpt-4.1-mini         │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -181,6 +181,28 @@ GITHUB_TOKEN=ghp_your_token_here
 # Cascading fallback: when one model is rate-limited, advances to next
 GITHUB_MODEL_CHAIN=o3,o3-mini,o4-mini,gpt-4.1-mini
 ```
+
+### Cross-Provider Fallback (Recommended)
+
+For maximum reliability, enable both providers. Bedrock is the primary model, and if it fails (token expired, service down), GuardianAI auto-falls back to GitHub Models:
+
+```bash
+# Primary: Bedrock (Claude Sonnet 4)
+LLM_PROVIDER=bedrock
+AWS_BEARER_TOKEN_BEDROCK=ABSK_your_token_here
+
+# Fallback: GitHub Models (full chain)
+FALLBACK_PROVIDER=github
+GITHUB_TOKEN=ghp_your_token_here
+GITHUB_MODEL_CHAIN=o3,o4-mini,o3-mini,gpt-4.1-mini
+```
+
+**Fallback cascade:**
+```
+Bedrock Sonnet 4 → Bedrock Haiku 3.5 → GitHub o3 → o4-mini → o3-mini → gpt-4.1-mini
+```
+
+Set `FALLBACK_PROVIDER=` (empty) to disable cross-provider fallback.
 
 ### Proxy Configuration (Intel Network)
 
@@ -501,7 +523,8 @@ All settings are loaded from `.env` (or environment variables). CLI flags overri
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_PROVIDER` | `bedrock` | LLM backend: `bedrock` or `github` |
+| `LLM_PROVIDER` | `bedrock` | Primary LLM backend: `bedrock` or `github` |
+| `FALLBACK_PROVIDER` | `github` | Cross-provider fallback: `github`, `bedrock`, or empty to disable |
 | `AWS_BEARER_TOKEN_BEDROCK` | — | AIDE bearer token (starts with `ABSK...`) |
 | `AWS_REGION` | `us-east-2` | AWS region for Bedrock API |
 | `BEDROCK_MODEL` | `global.anthropic.claude-sonnet-4-20250514-v1:0` | Primary Bedrock model ID |

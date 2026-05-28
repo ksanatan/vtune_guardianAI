@@ -101,6 +101,11 @@ def check(
     # Override config with CLI options
     if provider:
         config.llm_provider = provider
+        # Auto-flip fallback to the OTHER provider for cross-provider resilience
+        if provider == "github" and config.fallback_provider == "github":
+            config.fallback_provider = "bedrock"
+        elif provider == "bedrock" and config.fallback_provider == "bedrock":
+            config.fallback_provider = "github"
     if report:
         config.report_format = report
     if severity:
@@ -267,6 +272,11 @@ def fix(
     config = GuardianConfig.load()
     if provider:
         config.llm_provider = provider
+        # Auto-flip fallback to the OTHER provider for cross-provider resilience
+        if provider == "github" and config.fallback_provider == "github":
+            config.fallback_provider = "bedrock"
+        elif provider == "bedrock" and config.fallback_provider == "bedrock":
+            config.fallback_provider = "github"
 
     # Determine repository path
     repo_path = Path(repo) if repo else Path.cwd()

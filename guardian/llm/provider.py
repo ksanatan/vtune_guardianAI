@@ -91,17 +91,31 @@ class ModelChainChatModel(BaseChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> ChatResult:
-        """Try current model; on rate-limit error, advance chain and retry."""
+        """Try current model with retry+backoff; on persistent rate-limit, advance chain."""
         while self.current_index < len(self.models):
-            try:
-                model = self.models[self.current_index]
-                return model._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
-            except Exception as e:
-                if _is_rate_limit_error(e) and self.has_next_model:
-                    self.advance_to_next_model()
-                    time.sleep(2)  # Brief cooldown
-                    continue
-                raise  # No more models or non-rate-limit error
+            model = self.models[self.current_index]
+            # Retry current model up to 2 times with exponential backoff
+            for retry in range(3):
+                try:
+                    return model._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+                except Exception as e:
+                    if _is_rate_limit_error(e):
+                        if retry < 2:
+                            wait = 5 * (2 ** retry)  # 5s, 10s
+                            console.print(
+                                f"  [dim]⏳ Rate limited on {self.model_names[self.current_index]}, "
+                                f"retrying in {wait}s (attempt {retry+2}/3)...[/dim]"
+                            )
+                            time.sleep(wait)
+                            continue
+                        # All retries exhausted for this model
+                        if self.has_next_model:
+                            self.advance_to_next_model()
+                            time.sleep(3)
+                            break  # Move to next model in outer while
+                        # No more models — raise so cross-provider fallback can catch it
+                        raise
+                    raise  # Non-rate-limit error — propagate immediately
 
         # Should not reach here, but just in case
         raise RuntimeError("All models in the chain are exhausted.")
@@ -114,6 +128,7 @@ class FallbackChatModel(BaseChatModel):
 
     When the primary model returns HTTP 429 (rate limited) or similar errors,
     this wrapper automatically retries with the fallback model and logs the switch.
+    Non-sticky: periodically re-tries primary to recover when cooldown expires.
     """
 
     primary: BaseChatModel
@@ -121,6 +136,8 @@ class FallbackChatModel(BaseChatModel):
     primary_name: str = "primary"
     fallback_name: str = "fallback"
     _switched_to_fallback: bool = False
+    _calls_since_switch: int = 0
+    _retry_primary_every: int = 5  # Re-try primary every 5 calls
 
     class Config:
         arbitrary_types_allowed = True
@@ -136,24 +153,36 @@ class FallbackChatModel(BaseChatModel):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> ChatResult:
-        """Try primary model first; on rate-limit error, fall back."""
-        if not self._switched_to_fallback:
-            try:
-                return self.primary._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
-            except Exception as e:
-                if _is_rate_limit_error(e):
+        """Try primary model first; on rate-limit error, fall back. Periodically retry primary."""
+        if self._switched_to_fallback:
+            self._calls_since_switch += 1
+            # Periodically re-try primary to recover from temporary rate limits
+            if self._calls_since_switch >= self._retry_primary_every:
+                try:
+                    result = self.primary._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
                     console.print(
-                        f"  [yellow]⚠ Rate limited on {self.primary_name} — "
-                        f"switching to {self.fallback_name}[/yellow]"
+                        f"  [green]✓ {self.primary_name} recovered — switching back[/green]"
                     )
-                    self._switched_to_fallback = True
-                    # Brief pause before retry
-                    time.sleep(2)
-                    return self.fallback._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
-                raise  # Re-raise non-rate-limit errors
+                    self._switched_to_fallback = False
+                    self._calls_since_switch = 0
+                    return result
+                except Exception:
+                    self._calls_since_switch = 0  # Reset counter, try again later
+            return self.fallback._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
 
-        # Already switched — use fallback directly
-        return self.fallback._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+        try:
+            return self.primary._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+        except Exception as e:
+            if _is_rate_limit_error(e):
+                console.print(
+                    f"  [yellow]⚠ Rate limited on {self.primary_name} — "
+                    f"switching to {self.fallback_name}[/yellow]"
+                )
+                self._switched_to_fallback = True
+                self._calls_since_switch = 0
+                time.sleep(3)
+                return self.fallback._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+            raise  # Re-raise non-rate-limit errors
 
 
 # ── Shared Helpers ───────────────────────────────────────────────────────────

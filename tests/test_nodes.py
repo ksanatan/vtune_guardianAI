@@ -28,14 +28,14 @@ class TestGuardianConfig:
         assert config.enable_ai_review is True
 
     def test_active_llm_info(self):
-        config = GuardianConfig(github_model="o3", github_fallback_model="o3-mini")
+        config = GuardianConfig(llm_provider="github", github_model="o3", github_fallback_model="o3-mini")
         info = config.get_active_llm_info()
         assert "GitHub Models" in info
         assert "o3" in info
         assert "o3-mini" in info
 
     def test_active_llm_info_no_fallback(self):
-        config = GuardianConfig(github_model="o3", github_fallback_model="")
+        config = GuardianConfig(llm_provider="github", github_model="o3", github_fallback_model="")
         info = config.get_active_llm_info()
         assert "GitHub Models" in info
         assert "o3" in info

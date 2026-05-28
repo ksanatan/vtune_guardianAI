@@ -26,6 +26,11 @@ reports/
 *.html
 !guardian/reporters/html_report.py
 
+# Benchmark / temp artifacts
+test_coverity.csv
+*.log
+benchmark_results/
+
 # OS
 .DS_Store
 Thumbs.db

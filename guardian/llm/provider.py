@@ -1,16 +1,19 @@
 """
-VTune GuardianAI - LLM Provider (GitHub Models)
-=================================================
-Creates an LLM instance backed by GitHub Copilot / GitHub Models.
-Uses the OpenAI-compatible endpoint at models.inference.ai.azure.com.
+VTune GuardianAI - LLM Provider (GitHub Models + AWS Bedrock)
+===============================================================
+Creates LLM instances backed by GitHub Models or AWS Bedrock (Claude).
 
-Supports two modes:
+GitHub Models supports two modes:
   1. **Model Chain** (recommended): Cycles through a list of models
      (e.g. o3 → o3-mini → o4-mini → gpt-4.1-mini). When one exhausts
      its rate limit, the chain advances to the next model and **retries
      only the files that failed** — results already obtained from the
      previous model are kept.
   2. **Simple Fallback** (legacy): primary → single fallback, sticky switch.
+
+AWS Bedrock:
+  Uses AIDE bearer tokens decoded to AWS credentials for ChatBedrockConverse.
+  Primary + fallback model support.
 """
 
 from __future__ import annotations
@@ -203,23 +206,117 @@ def _create_chat_model(model_name: str, config: GuardianConfig):
 
 def get_llm(config: GuardianConfig) -> BaseChatModel:
     """
-    Create a GitHub Models LLM instance with automatic fallback.
+    Create an LLM instance based on the configured provider.
 
-    If GITHUB_MODEL_CHAIN is set (comma-separated list of models),
-    creates a ModelChainChatModel that cycles through the chain.
-    Otherwise falls back to the legacy primary + fallback mode.
-
-    Uses the OpenAI-compatible endpoint authenticated with a GitHub PAT.
-
-    Args:
-        config: GuardianConfig with GitHub Models settings.
+    Routes to:
+      - AWS Bedrock (Claude) if LLM_PROVIDER=bedrock
+      - GitHub Models if LLM_PROVIDER=github
 
     Returns:
         A LangChain-compatible ChatModel instance.
 
     Raises:
-        ValueError: If GITHUB_TOKEN is not set.
+        ValueError: If required credentials are not set.
     """
+    if config.llm_provider == "bedrock":
+        return _get_bedrock_llm(config)
+    return _get_github_llm(config)
+
+
+def _get_bedrock_llm(config: GuardianConfig) -> BaseChatModel:
+    """Create an AWS Bedrock (Claude) LLM with fallback support."""
+    if not config.bedrock_bearer_token:
+        raise ValueError(
+            "AWS_BEARER_TOKEN_BEDROCK is required for Bedrock provider.\n"
+            "Generate token at: https://tokengen.aide.infra-host.com/"
+        )
+
+    try:
+        from langchain_aws import ChatBedrockConverse
+        import boto3
+    except ImportError:
+        raise ImportError(
+            "langchain-aws and boto3 are required for Bedrock.\n"
+            "Install with: pip install langchain-aws boto3"
+        )
+
+    # Decode AIDE bearer token to AWS credentials
+    access_key, secret_key, session_token = _decode_bearer_token(config.bedrock_bearer_token)
+
+    # Create boto3 session with decoded credentials
+    session = boto3.Session(
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        aws_session_token=session_token,
+        region_name=config.bedrock_region,
+    )
+    bedrock_client = session.client("bedrock-runtime", region_name=config.bedrock_region)
+
+    primary = ChatBedrockConverse(
+        model=config.bedrock_model,
+        client=bedrock_client,
+        temperature=0.1,
+        max_tokens=4096,
+    )
+
+    if config.bedrock_fallback_model and config.bedrock_fallback_model != config.bedrock_model:
+        fallback = ChatBedrockConverse(
+            model=config.bedrock_fallback_model,
+            client=bedrock_client,
+            temperature=0.1,
+            max_tokens=4096,
+        )
+        console.print(
+            f"  [dim]🔄 Bedrock fallback: {config.bedrock_model.split('.')[-1][:30]} → "
+            f"{config.bedrock_fallback_model.split('.')[-1][:30]}[/dim]"
+        )
+        return FallbackChatModel(
+            primary=primary,
+            fallback=fallback,
+            primary_name=config.bedrock_model,
+            fallback_name=config.bedrock_fallback_model,
+        )
+
+    return primary
+
+
+def _decode_bearer_token(token: str) -> tuple[str, str, str]:
+    """
+    Decode AIDE bearer token (ABSK format) to AWS credentials.
+
+    AIDE tokens are base64-encoded strings in format:
+        ABSK<base64(access_key:secret_key:session_token)>
+    or sometimes:
+        ABSK<base64(access_key:secret_key)>
+    """
+    import base64
+
+    # Strip ABSK prefix if present
+    raw = token
+    if raw.startswith("ABSK"):
+        raw = raw[4:]
+
+    # Decode base64
+    try:
+        decoded = base64.b64decode(raw).decode("utf-8")
+    except Exception:
+        # Might already be decoded or different format
+        decoded = raw
+
+    parts = decoded.split(":")
+    if len(parts) >= 3:
+        return parts[0], parts[1], ":".join(parts[2:])
+    elif len(parts) == 2:
+        return parts[0], parts[1], ""
+    else:
+        raise ValueError(
+            "Cannot decode AIDE bearer token. "
+            "Expected format: ABSK<base64(access_key:secret_key:session_token)>"
+        )
+
+
+def _get_github_llm(config: GuardianConfig) -> BaseChatModel:
+    """Create a GitHub Models LLM with model chain or simple fallback."""
     if not config.github_token:
         raise ValueError(
             "GITHUB_TOKEN is required. "

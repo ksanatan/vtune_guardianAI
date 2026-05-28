@@ -65,6 +65,18 @@ def check(
         None, "--severity", "-s",
         help="Minimum severity threshold: critical, warning, info"
     ),
+    provider: Optional[str] = typer.Option(
+        None, "--provider", "-p",
+        help="LLM provider: github, bedrock (Claude via AWS)"
+    ),
+    files: Optional[str] = typer.Option(
+        None, "--files", "-f",
+        help="Comma-separated list of files to scan (full-file analysis, not just diffs)."
+    ),
+    base: Optional[str] = typer.Option(
+        None, "--base", "-b",
+        help="Base branch/commit to diff against (e.g., master, main, HEAD~5)."
+    ),
     no_static: bool = typer.Option(
         False, "--no-static",
         help="Skip static analysis (cppcheck/clang-tidy)."
@@ -87,6 +99,8 @@ def check(
     config = GuardianConfig.load()
 
     # Override config with CLI options
+    if provider:
+        config.llm_provider = provider
     if report:
         config.report_format = report
     if severity:
@@ -114,7 +128,12 @@ def check(
 
     console.print(f"  📂 Repository: [bold]{repo_path}[/bold]")
     console.print(f"  🤖 LLM: [bold]{config.get_active_llm_info()}[/bold]")
-    console.print(f"  📋 Scan Mode: [bold]{'All changes' if all_changes else 'Staged changes only'}[/bold]")
+    if files:
+        console.print(f"  📋 Scan Mode: [bold]Specific files ({len(files.split(','))} file(s))[/bold]")
+    elif base:
+        console.print(f"  📋 Scan Mode: [bold]Diff against {base}[/bold]")
+    else:
+        console.print(f"  📋 Scan Mode: [bold]{'All changes' if all_changes else 'Staged changes only'}[/bold]")
     console.print()
 
     # Import and run the LangGraph agent
@@ -187,12 +206,258 @@ def check(
 
 
 @app.command()
+def fix(
+    repo: Optional[str] = typer.Option(
+        None, "--repo", "-r",
+        help="Path to the git repository. Defaults to current directory."
+    ),
+    file: Optional[str] = typer.Option(
+        None, "--file", "-f",
+        help="Relative path to the file containing the defect."
+    ),
+    line: Optional[int] = typer.Option(
+        None, "--line", "-l",
+        help="Line number of the defect (1-based)."
+    ),
+    issue: Optional[str] = typer.Option(
+        None, "--issue", "-i",
+        help="Issue type/description (e.g., 'RESOURCE_LEAK', 'Null pointer dereference')."
+    ),
+    apply: bool = typer.Option(
+        False, "--apply",
+        help="Apply the fix directly to the file (otherwise just shows the diff)."
+    ),
+    from_csv: Optional[str] = typer.Option(
+        None, "--from-csv",
+        help="Path to Coverity CSV export to batch-fix all defects."
+    ),
+    from_json: Optional[str] = typer.Option(
+        None, "--from-json",
+        help="Path to cov-format-errors JSON output to batch-fix all defects."
+    ),
+    provider: Optional[str] = typer.Option(
+        None, "--provider", "-p",
+        help="LLM provider: github, bedrock (Claude via AWS)"
+    ),
+    max_fixes: int = typer.Option(
+        50, "--max-fixes",
+        help="Maximum number of defects to fix in batch mode."
+    ),
+    severity_filter: Optional[str] = typer.Option(
+        None, "--severity",
+        help="Only fix defects of this severity (High, Medium, Low) in batch mode."
+    ),
+):
+    """
+    🔧 Auto-fix Coverity/static-analysis defects using AI.
+
+    Single defect mode:
+        vtune-guardian fix --file src/collector.cpp --line 142 --issue "RESOURCE_LEAK"
+
+    Batch mode from Coverity CSV:
+        vtune-guardian fix --from-csv coverity_export.csv --apply
+
+    Batch mode from JSON:
+        vtune-guardian fix --from-json cov-errors.json --apply
+    """
+    _print_banner()
+    start_time = time.time()
+
+    # Load config
+    config = GuardianConfig.load()
+    if provider:
+        config.llm_provider = provider
+
+    # Determine repository path
+    repo_path = Path(repo) if repo else Path.cwd()
+    if not (repo_path / ".git").exists():
+        current = repo_path
+        found = False
+        while current != current.parent:
+            if (current / ".git").exists():
+                repo_path = current
+                found = True
+                break
+            current = current.parent
+        if not found:
+            console.print("[red]❌ Error:[/red] Not a git repository. Use --repo to specify the path.")
+            raise typer.Exit(code=1)
+
+    # Get LLM
+    from guardian.llm.provider import get_llm
+    try:
+        llm = get_llm(config)
+    except Exception as e:
+        console.print(f"[red]❌ LLM init failed:[/red] {e}")
+        raise typer.Exit(code=2)
+
+    from guardian.nodes.fix_issue import fix_single_issue, apply_fix, FixResult
+    from guardian.nodes.coverity_parser import (
+        parse_coverity_csv, parse_coverity_json, get_issue_description, CoverityDefect,
+    )
+
+    # ── Batch mode from CSV/JSON ──
+    if from_csv or from_json:
+        try:
+            if from_csv:
+                defects = parse_coverity_csv(from_csv, repo_root=str(repo_path))
+                source_label = from_csv
+            else:
+                defects = parse_coverity_json(from_json, repo_root=str(repo_path))
+                source_label = from_json
+        except (FileNotFoundError, ValueError) as e:
+            console.print(f"[red]❌ Parse error:[/red] {e}")
+            raise typer.Exit(code=1)
+
+        # Apply filters
+        if severity_filter:
+            defects = [d for d in defects if d.severity.lower() == severity_filter.lower()]
+
+        if not defects:
+            console.print("[yellow]No defects found matching criteria.[/yellow]")
+            raise typer.Exit(code=0)
+
+        defects = defects[:max_fixes]
+        console.print(f"  📂 Repository: [bold]{repo_path}[/bold]")
+        console.print(f"  📄 Source: [bold]{source_label}[/bold]")
+        console.print(f"  🐛 Defects: [bold]{len(defects)}[/bold]")
+        console.print()
+
+        _run_batch_fix(defects, str(repo_path), llm, apply, start_time)
+        return
+
+    # ── Single defect mode ──
+    if not file or not line or not issue:
+        console.print(
+            "[red]❌ Error:[/red] Single-fix mode requires --file, --line, and --issue.\n"
+            "  Example: vtune-guardian fix --file src/foo.cpp --line 42 --issue RESOURCE_LEAK\n"
+            "  Or use --from-csv / --from-json for batch mode."
+        )
+        raise typer.Exit(code=1)
+
+    console.print(f"  📂 Repository: [bold]{repo_path}[/bold]")
+    console.print(f"  📄 File: [bold]{file}[/bold]")
+    console.print(f"  📍 Line: [bold]{line}[/bold]")
+    console.print(f"  🐛 Issue: [bold]{issue}[/bold]")
+    console.print()
+
+    with console.status("[bold cyan]Generating fix..."):
+        result = fix_single_issue(
+            repo_path=str(repo_path),
+            file_path=file,
+            line_number=line,
+            issue_type=get_issue_description(issue, issue),
+            llm=llm,
+        )
+
+    _display_fix_result(result, str(repo_path), apply)
+
+    elapsed = time.time() - start_time
+    console.print(f"\n  ⏱️  Time: [bold]{elapsed:.1f}s[/bold]")
+
+
+def _run_batch_fix(defects: list, repo_path: str, llm, do_apply: bool, start_time: float):
+    """Run batch fix across a list of CoverityDefect objects."""
+    from guardian.nodes.fix_issue import fix_single_issue, apply_fix
+    from guardian.nodes.coverity_parser import get_issue_description
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
+
+    results = {"fixed": 0, "failed": 0, "skipped": 0}
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Fixing defects...", total=len(defects))
+
+        for defect in defects:
+            progress.update(task, description=f"[cyan]{defect.file_path}:{defect.line_number}[/cyan]")
+
+            fix_result = fix_single_issue(
+                repo_path=repo_path,
+                file_path=defect.file_path,
+                line_number=defect.line_number,
+                issue_type=get_issue_description(defect.checker, defect.description),
+                llm=llm,
+            )
+
+            if not fix_result.success:
+                results["failed"] += 1
+                console.print(
+                    f"  [red]✗[/red] CID-{defect.cid} {defect.checker} "
+                    f"@ {defect.file_path}:{defect.line_number} — {fix_result.error}"
+                )
+            elif do_apply:
+                success, msg = apply_fix(repo_path, fix_result)
+                if success:
+                    results["fixed"] += 1
+                    console.print(
+                        f"  [green]✓[/green] CID-{defect.cid} {defect.checker} "
+                        f"@ {defect.file_path}:{defect.line_number} — Applied"
+                    )
+                else:
+                    results["failed"] += 1
+                    console.print(
+                        f"  [red]✗[/red] CID-{defect.cid} {defect.checker} "
+                        f"@ {defect.file_path}:{defect.line_number} — {msg}"
+                    )
+            else:
+                results["fixed"] += 1
+                _display_fix_result(fix_result, repo_path, do_apply=False, compact=True)
+
+            progress.advance(task)
+
+    elapsed = time.time() - start_time
+    console.print()
+    console.print(Panel(
+        f"[bold]Batch Fix Summary[/bold]\n"
+        f"  ✅ Fixed:   {results['fixed']}\n"
+        f"  ❌ Failed:  {results['failed']}\n"
+        f"  ⏭️  Skipped: {results['skipped']}\n"
+        f"  ⏱️  Time:    {elapsed:.1f}s",
+        border_style="cyan",
+    ))
+
+
+def _display_fix_result(result, repo_path: str, do_apply: bool, compact: bool = False):
+    """Display a single fix result."""
+    from guardian.nodes.fix_issue import apply_fix
+
+    if not result.success:
+        console.print(f"  [red]❌ Cannot fix:[/red] {result.error}")
+        return
+
+    if compact:
+        console.print(
+            f"  [green]✓[/green] {result.file_path}:{result.line_number} — {result.explanation}"
+        )
+    else:
+        from rich.syntax import Syntax
+        console.print(f"\n[bold green]Fix generated:[/bold green] {result.explanation}\n")
+        console.print("[dim]── Original ──[/dim]")
+        console.print(Syntax(result.original_code, "text", theme="monokai", line_numbers=False))
+        console.print("[dim]── Fixed ──[/dim]")
+        console.print(Syntax(result.fixed_code, "text", theme="monokai", line_numbers=False))
+
+    if do_apply:
+        success, msg = apply_fix(repo_path, result)
+        if success:
+            console.print(f"  [green]✅ {msg}[/green]")
+        else:
+            console.print(f"  [red]❌ {msg}[/red]")
+
+
+@app.command()
 def config_show():
     """📋 Show current configuration."""
     _print_banner()
     config = GuardianConfig.load()
 
     console.print("[bold]Current Configuration:[/bold]\n")
+    console.print(f"  Provider:          {config.llm_provider}")
     console.print(f"  LLM:               {config.get_active_llm_info()}")
     console.print(f"  Severity:          {config.severity_threshold}")
     console.print(f"  Max Files:         {config.max_files}")

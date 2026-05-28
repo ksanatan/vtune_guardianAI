@@ -3,6 +3,10 @@ VTune GuardianAI - Git Diff Node
 ==================================
 Extracts changed files and diffs from the git repository.
 This is the first node in the pipeline.
+
+Large file chunking: Files with >2000 lines of diff are split into
+overlapping chunks (50-line overlap) so the LLM can analyze them
+without truncation.
 """
 
 from __future__ import annotations
@@ -17,6 +21,10 @@ from guardian.agents.state import GuardianState, FileChange, Issue
 from guardian.config import GuardianConfig
 
 console = Console()
+
+# ── Chunking configuration ──
+MAX_LINES_PER_CHUNK = 2000  # Max diff lines before splitting
+OVERLAP = 50                 # Lines of overlap between consecutive chunks
 
 
 def git_diff_node(state: GuardianState, config: GuardianConfig) -> dict:
@@ -109,6 +117,36 @@ def git_diff_node(state: GuardianState, config: GuardianConfig) -> dict:
             f"  [yellow]⚠ {len(file_changes)} files changed, limiting to {config.max_files}[/yellow]"
         )
         file_changes = file_changes[:config.max_files]
+
+    # ── Chunk large files ──
+    chunked_changes = []
+    for fc in file_changes:
+        lines = fc.diff_content.splitlines()
+        if len(lines) <= MAX_LINES_PER_CHUNK:
+            chunked_changes.append(fc)
+        else:
+            # Split into overlapping chunks
+            chunk_idx = 0
+            start = 0
+            while start < len(lines):
+                end = min(start + MAX_LINES_PER_CHUNK, len(lines))
+                chunk_lines = lines[start:end]
+                chunk_idx += 1
+                chunked_changes.append(FileChange(
+                    file_path=fc.file_path,
+                    change_type=fc.change_type,
+                    diff_content="\n".join(chunk_lines),
+                    language=fc.language,
+                    lines_added=sum(1 for l in chunk_lines if l.startswith("+")),
+                    lines_deleted=sum(1 for l in chunk_lines if l.startswith("-")),
+                ))
+                start = end - OVERLAP  # Overlap for cross-boundary issues
+            if chunk_idx > 1:
+                console.print(
+                    f"    [dim]📎 {fc.file_path}: split into {chunk_idx} chunks "
+                    f"({len(lines)} lines)[/dim]"
+                )
+    file_changes = chunked_changes
 
     # Check for language types
     languages = {fc.language for fc in file_changes}

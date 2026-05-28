@@ -12,5 +12,5 @@ Usage:
     vtune-guardian check --provider gemini  # Use Gemini API
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __app_name__ = "VTune GuardianAI"
